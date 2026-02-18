@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PCR plate</title>
+  <style>
+	.button {
+		padding: 0px 20px;
+		text-align: center;
+		margin: 15px 10px 0px 10px;
+		cursor: pointer;
+	}
+	
+	/********************/
+	/*		Wells		*/
+	/********************/
+	:root {
+		--well-width: 45px;
+		--well-height: 45px;
+		--well-border: 4px;
+	}
+	.well {
+		width: var(--well-width);
+		height: var(--well-height);
+		border-width: var(--well-border);
+		border-style: solid;
+		border-color: skyblue;/* silver*/
+		border-radius: 50%;
+		margin: 5px;
+		cursor: pointer;
+	}
+	.well-mini {
+		width:  calc(0.5 * var(--well-width));
+		height: calc(0.5 * var(--well-height));
+		border-width: calc(0.5 * var(--well-border));
+		vertical-align: text-bottom;/*baseline;*/
+		cursor: default;
+	}
+	
+	.well-Sample {
+		background-color: black;
+	}
+	.well-PC {
+		background-color: red;
+	}
+	.well-NC {
+		background-color: green;
+	}
+	.well-Empty {
+		background-color: white;
+	}
+	.well-NA {
+		background-color: gray;
+	}	
+
+	/********************/
+	/*	Context menu	*/
+	/********************/
+	.context-menu {
+		position: absolute;
+		background-color: #f9f9f9;
+		border: 1px solid #ccc;
+		padding: 5px 0;
+		z-index: 1000;
+    }
+    .context-menu-item {
+		padding: 5px 20px;
+		cursor: pointer;
+    }
+    .context-menu-item:hover {
+		background-color: #ddd;
+    }
+  </style>
+</head>
+<body onload="getStarted(event)" style="font-family: Arial; width: 100%; cursor: default;">
+  	<div id="legend" style="display: inline-block; padding: 15px; vertical-align: top;"></div>
+  	<div id="plate" style="display: inline-block;"></div>
+	<div style="width: 100%; text-align: center;">
+		<button onclick="saveClicked(event)" class="button"><h3>Save</h3></button>
+		<button onclick="cancelClicked(event)" class="button"><h3>Cancel</h3></button>
+	</div>
+	
+	<div id="contextMenu" class="context-menu" style="display: none;"></div>
+	<template id="menuItemTemplate">
+		<div class="context-menu-item" onclick="contextMenuItemClicked(event)"></div>
+	</template>
+
+  <script>
+	const COORDINAT_SPLITTER = " ";
+	// https://www.codecademy.com/resources/docs/javascript/enums
+	const statuses = Object.freeze({ 
+									Empty: 0,
+									Sample: 1,
+									PC: 2,
+									NC: 3,
+									NA: 4
+									});
+	
+	let wells;
+	
+	/////////////////////
+	// Events&handlers //
+    /////////////////////
+	function getStarted(event){
+		//
+		 wells = emulateWells();
+		
+		// Legend
+		createLegend();
+		
+		// PCR plate
+		createPlate();
+		
+		// Turn off default context menu
+		window.oncontextmenu = (event) => {event.preventDefault()};
+	}
+	// Plate elements //
+	function columnHeaderClicked(event){
+		let column = event.target;
+		const isClicked = column.dataset.isClicked;
+
+		column.dataset.isClicked = updateWells(getColumnWells(column.innerHTML), isClicked);
+	}
+	function rowHeaderClicked(event){
+		let row = event.target;
+		const isClicked = row.dataset.isClicked; 
+		
+		row.dataset.isClicked = updateWells(getRowWells(getWellRowIdByName(row.innerHTML)), isClicked);
+	}
+	function wellClicked(event){		
+		changeWellStyle(event.target,statuses.Sample);
+	}
+	// Context menu //
+	function showContextMenu(event) {
+		let contextMenu = document.getElementById('contextMenu');
+		
+		createContextMenu(contextMenu,event.target);
+		configContextMenu(contextMenu,event);
+	
+		// Close context menu on outside clicked
+		window.onclick = function(event) {
+			if (!event.target.matches('.context-menu-item')) {
+				contextMenu.style.display = 'none';
+			}
+		};
+    }
+	function contextMenuItemClicked(event){
+		// Get data //
+		const contextItem = event.target;
+		const contextMenu = contextItem.parentElement; 
+		const coords = contextMenu.dataset.targetId.split(COORDINAT_SPLITTER);
+		const targetRowWells = getRowWells(coords[0]);// -or- array = [...nodelist];
+		let targetWell = targetRowWells.find(element => element.attributes["data-col-id"].value == coords[1]);
+		
+		// Do job //
+		// - apply style according item selected
+		changeWellStyle(targetWell,Object.keys(statuses).indexOf(contextItem.innerHTML),true);
+		
+		// - close context menu
+		contextMenu.style.display = 'none';
+	}
+	// Buttons //
+	function saveClicked(event){
+		alert("Changes are saved successfully!");
+		window.close();
+	}
+	function cancelClicked(event){
+		//Confirm:
+		//https://stackoverflow.com/questions/2076299/how-to-close-current-tab-in-a-browser-window
+		alert("You are about exit PCR-plate tool without save changes!");
+		window.close();
+	}
+	///////////
+	// Tools //
+	///////////
+	function createLegend(){
+		let legendContainer = document.getElementById('legend');
+		let itemContainer,iconTemplate,icon;
+		
+		// Initialize //
+		iconTemplate = document.createElement('div');
+		iconTemplate.classList.add("well");
+		iconTemplate.classList.add("well-mini");
+		iconTemplate.style.display = "inline-block";
+		
+		// Title //
+		//TODO: Add
+		
+		// Body //
+		for (status in statuses){
+			icon = iconTemplate.cloneNode();
+			setWellStyle(icon,statuses[status]);
+
+			itemContainer = document.createElement('div');
+			itemContainer.appendChild(icon);
+			itemContainer.appendChild(document.createTextNode(status));//itemContainer.textContent = status;
+			
+			legendContainer.appendChild(itemContainer);
+		}
+	}
+	function createPlate(){
+		let colId, rowId;
+		let rowElement;
+		let plate = document.getElementById('plate');
+		let table = document.createElement('table');
+		
+		// Column headers //
+		rowElement = document.createElement('tr');
+		rowElement.appendChild(createThElement());
+		for (colId=1; colId<13; colId++){
+			rowElement.appendChild(createThElement(columnHeaderClicked,colId));
+		}
+		table.appendChild(rowElement);
+		
+		// Row headers & Wells //
+		for (rowId=1; rowId<9; rowId++){
+			rowElement = document.createElement('tr');
+			rowElement.appendChild(createThElement(rowHeaderClicked,getWellRowNameByRowId(rowId)));
+			
+			for (colId=1; colId<13; colId++){
+				rowElement.appendChild(createWell(rowId,colId,getWellSourceStatus(getWellAdrByCoords(rowId,colId))));
+			}
+			
+			table.appendChild(rowElement);
+		}
+
+		plate.appendChild(table);
+	}
+	function createContextMenu(menuContainer,targetWell){
+		// Template tag info:
+		//https://www.w3schools.com/tags/tag_template.asp
+		let itemMenu, status;
+		const template = document.getElementById("menuItemTemplate");
+		let itemTemplate = template.content.querySelector("div");
+		const wellStatusStyle = targetWell.classList.item(1);
+		
+		// Clear old items
+		while (menuContainer.hasChildNodes()) {
+			menuContainer.removeChild(menuContainer.firstChild);
+		}
+		
+		// Add new ones
+		for (status in statuses){
+			if((statuses[status] == statuses.NA) || (wellStatusStyle == getWellStyleByStatus(statuses[status])))
+				continue;
+				
+			item = itemTemplate.cloneNode(true); //document.importNode(itemTemplate, true);//
+			item.textContent = status;
+
+			menuContainer.appendChild(item);
+		}
+	}
+	function configContextMenu(menuContainer,params){
+		menuContainer.style.left = params.pageX + 'px';
+		menuContainer.style.top = params.pageY + 'px';
+		menuContainer.style.display = 'block';
+		menuContainer.dataset.targetId = params.srcElement.dataset.rowId + COORDINAT_SPLITTER + params.srcElement.dataset.colId;
+	}
+	
+	function createThElement(clickHandler,innerHtml){
+		let thElementFilled = document.createElement('th');
+		
+		if(clickHandler){
+			thElementFilled.addEventListener("click",clickHandler);
+			thElementFilled.dataset.isClicked = false;
+		}
+		if(innerHtml){
+			thElementFilled.textContent = innerHtml;
+		}
+		
+		return thElementFilled;
+	}
+	function createWell(row,col,status){
+		let tdElement = document.createElement('td');
+		let divElement = document.createElement('div');
+		
+		// Config well
+		divElement.dataset.rowId = row;
+		divElement.dataset.colId = col;
+		divElement.classList.add("well");
+		setWellStyle(divElement,status);
+		if(status != statuses.NA){
+			divElement.addEventListener("click",wellClicked);
+			divElement.addEventListener("contextmenu",showContextMenu);
+		}
+		
+		//
+		tdElement.appendChild(divElement);
+		
+		return tdElement;
+	}
+	function updateWells(wells,clickFlag){
+		let wellId;
+		const flag = (clickFlag == "true"); //https://https://www.squash.io/how-to-convert-a-string-to-boolean-in-javascript
+		const status = getStatusByFlag(flag);
+		
+		for (wellId in wells){
+			changeWellStyle(wells[wellId],status);
+		}
+		
+		return !flag;
+	}
+	
+	///////////////
+	// Utilities //
+	///////////////
+	// Wells address //
+	function getWellAdrByCoords(rowId,colId){
+		return getWellRowNameByRowId(rowId) + colId;
+	}
+	function getWellRowNameByRowId(rowId){
+		return String.fromCharCode(rowId + 64);
+	}
+	function getWellRowIdByName(rowName){
+		return rowName.charCodeAt(0) - 64; //NOTE: charCodeAt(...) - UTF-16, codePointAt(...) - Unicode;
+	}
+	// Wells access //
+	function getColumnWells(colId){
+		return Array.from(document.querySelectorAll('[data-col-id="' + colId + '"]'))
+	}
+	function getRowWells(rowId){
+		return Array.from(document.querySelectorAll('[data-row-id="' + rowId + '"]'))
+	}
+	// Wells status & styling //
+	function setWellStyle(well,status){
+		well.classList.add(getWellStyleByStatus(status));
+	}
+	function changeWellStyle(well,newStatus,forced){
+		const wellStatusStyle = well.classList.item(1);
+		
+		// Nothing to do when new and current statuses same!
+		if(wellStatusStyle == getWellStyleByStatus(newStatus))
+			return;		
+
+		// NA status immutable
+		if(wellStatusStyle == getWellStyleByStatus(statuses.NA))
+			return;
+
+		// PC and NC statuses could set explicitly only
+		if(!forced && (wellStatusStyle == getWellStyleByStatus(statuses.PC) || wellStatusStyle == getWellStyleByStatus(statuses.NC)))
+			return;
+
+		well.classList.remove(wellStatusStyle);
+		setWellStyle(well,newStatus);
+	}
+	function getWellStyleByStatus(status){
+		let style = "well-";
+		
+		switch(status) {
+			case statuses.Sample:
+				style +="Sample";
+			break;
+			case statuses.PC:
+				style +="PC";
+			break;
+			case statuses.NC:
+				style +="NC";
+			break;
+			case statuses.Empty:
+				style +="Empty";
+			break;
+			default:
+				style +="NA";
+		}
+
+		return style;
+	}
+	function getStatusByFlag(clickFlag){
+		return clickFlag ? statuses.Empty : statuses.Sample;
+	}
+	// Aux. //
+	function getWellSourceStatus(wellAdr){
+		/*
+		let random = Math.floor(Math.random() * 100);
+		
+		switch (true) {
+			case random < 5: return 0
+			case random < 97: return 1
+			case random < 98: return 2
+			case random < 99: return 3
+			default: return 4
+		}*/
+		return wells.hasOwnProperty(wellAdr)? wells[wellAdr] : statuses.NA;
+	}
+	function emulateWells(){
+		//https://www.makeuseof.com/javascript-dictionaries-create-use
+		let d = {};
+
+		d["A1"] = statuses.Sample;
+		d["A2"] = statuses.Sample;
+		d["A3"] = statuses.Sample;
+		d["A4"] = statuses.Sample;
+		d["A5"] = statuses.Sample;
+		d["A6"] = statuses.Sample;
+		d["A7"] = statuses.Empty;
+		d["A8"] = statuses.Sample;
+		d["A9"] = statuses.Sample;
+		d["A10"] = statuses.Sample;
+		d["A11"] = statuses.Sample;
+		d["A12"] = statuses.Sample;
+		d["B1"] = statuses.Sample;
+		d["B2"] = statuses.Empty;
+		d["B3"] = statuses.Sample;
+		d["B4"] = statuses.Sample;
+		d["B5"] = statuses.Sample;
+		d["B6"] = statuses.Sample;
+		d["B7"] = statuses.Sample;
+		d["B8"] = statuses.Sample;
+		d["B9"] = statuses.Empty;
+		d["B10"] = statuses.Sample;
+		d["B11"] = statuses.Sample;
+		d["B12"] = statuses.Sample;
+		d["C1"] = statuses.Sample;
+		d["C2"] = statuses.Sample;
+		d["C3"] = statuses.Sample;
+		d["C4"] = statuses.Empty;
+		d["C5"] = statuses.Sample;
+		d["C6"] = statuses.Sample;
+		d["C7"] = statuses.Sample;
+		d["C8"] = statuses.Sample;
+		d["C9"] = statuses.Sample;
+		d["C10"] = statuses.Sample;
+		d["C11"] = statuses.Sample;
+		d["C12"] = statuses.Sample;
+		d["D1"] = statuses.Sample;
+		d["D2"] = statuses.Sample;
+		d["D3"] = statuses.Sample;
+		d["D4"] = statuses.Sample;
+		d["D5"] = statuses.Sample;
+		d["D6"] = statuses.Sample;
+		d["D7"] = statuses.Sample;
+		d["D8"] = statuses.Sample;
+		d["D9"] = statuses.Sample;
+		d["D10"] = statuses.Sample;
+		d["D11"] = statuses.Sample;
+		d["D12"] = statuses.Sample;
+		d["E1"] = statuses.Sample;
+		d["E2"] = statuses.Sample;
+		d["E3"] = statuses.Sample;
+		d["E4"] = statuses.Sample;
+		d["E5"] = statuses.Empty;
+		d["E6"] = statuses.Sample;
+		d["E7"] = statuses.Sample;
+		d["E8"] = statuses.Sample;
+		d["E9"] = statuses.Sample;
+		d["E10"] = statuses.Sample;
+		d["E11"] = statuses.Sample;
+		d["E12"] = statuses.Sample;
+		d["F1"] = statuses.Sample;
+		d["F2"] = statuses.Sample;
+		d["F3"] = statuses.Sample;
+		d["F4"] = statuses.Sample;
+		d["F5"] = statuses.Sample;
+		d["F6"] = statuses.Sample;
+		d["F7"] = statuses.Sample;
+		d["F8"] = statuses.Sample;
+		d["F9"] = statuses.Sample;
+		d["F10"] = statuses.Empty;
+		d["F11"] = statuses.Sample;
+		d["F12"] = statuses.Sample;
+		d["G1"] = statuses.Sample;
+		d["G2"] = statuses.Sample;
+		d["G3"] = statuses.Sample;
+		d["G4"] = statuses.Sample;
+		d["G5"] = statuses.Sample;
+		d["G6"] = statuses.Sample;
+		d["G7"] = statuses.Sample;
+		d["G8"] = statuses.Sample;
+		d["G9"] = statuses.Sample;
+		d["G10"] = statuses.Sample;
+		d["G11"] = statuses.Sample;
+		d["G12"] = statuses.Sample;
+		d["H1"] = statuses.Sample;
+		d["H2"] = statuses.Sample;
+		d["H3"] = statuses.Sample;
+		d["H4"] = statuses.Sample;
+		d["H5"] = statuses.Sample;
+		d["H6"] = statuses.Sample;
+		d["H7"] = statuses.Sample;
+		d["H8"] = statuses.Sample;
+		d["H9"] = statuses.PC;
+		d["H10"] = statuses.NC;
+		
+		return d;
+	}
+  </script>
+</body>
+</html>
